@@ -13,10 +13,12 @@ logging.basicConfig(
 log = logging.getLogger("bot")
 
 
-def main():
+async def main():
     token = BOT_TOKEN or os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN not set. Put it in .env or Render Environment Variables.")
+        raise RuntimeError(
+            "TELEGRAM_BOT_TOKEN not set. Put it in .env or Render Environment Variables."
+        )
 
     init_db()
 
@@ -32,8 +34,13 @@ def main():
     app.job_queue.run_once(send_channel_pin, when=5)  # wait 5 sec after startup
 
     log.info("Bot is running on Render as background worker...")
-    app.run_polling(drop_pending_updates=True)  # safer for restarts
+    await app.run_polling(drop_pending_updates=True)  # safer for restarts
 
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+
+    # Properly create an event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(main())
