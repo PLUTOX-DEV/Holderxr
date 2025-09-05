@@ -1,21 +1,24 @@
-import os
+import threading
 import asyncio
 from flask import Flask
-from dotenv import load_dotenv
-import main  # your async main.py
+from main import main_async  # only async function
 
-load_dotenv()
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Bot is running!"
+    return "Bot + Flask is running!"
+
+def run_bot():
+    loop = asyncio.new_event_loop()        # new loop for this thread
+    asyncio.set_event_loop(loop)
+    loop.create_task(main_async())         # schedule bot
+    loop.run_forever()                     # keep loop alive
 
 if __name__ == "__main__":
-    # Run bot in background async loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.create_task(main.main())  # schedule bot
+    # start bot in background thread
+    threading.Thread(target=run_bot, daemon=True).start()
 
-    # Run Flask (blocking)
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    # run flask server
+    app.run(host="0.0.0.0", port=10000)
+    

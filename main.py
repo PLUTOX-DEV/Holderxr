@@ -1,5 +1,6 @@
 import logging
 import os
+import asyncio
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 from bot.config import BOT_TOKEN
 from bot.db import init_db
@@ -8,17 +9,15 @@ from bot.handlers import cmd_start, cmd_admin, on_button, on_message, send_chann
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     level=logging.INFO,
-    force=True,  # important for Render logs
+    force=True,
 )
 log = logging.getLogger("bot")
 
 
-async def main():
+async def main_async():
     token = BOT_TOKEN or os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
-        raise RuntimeError(
-            "TELEGRAM_BOT_TOKEN not set. Put it in .env or Render Environment Variables."
-        )
+        raise RuntimeError("TELEGRAM_BOT_TOKEN not set. Put it in .env or Render Environment Variables.")
 
     init_db()
 
@@ -30,17 +29,12 @@ async def main():
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
 
-    # Schedule pin message once when bot starts
-    app.job_queue.run_once(send_channel_pin, when=5)  # wait 5 sec after startup
+    # Schedule pin message
+    app.job_queue.run_once(send_channel_pin, when=5)
 
-    log.info("Bot is running on Render as background worker...")
-    await app.run_polling(drop_pending_updates=True)  # safer for restarts
+    log.info("Bot is running...")
 
-
-if __name__ == "__main__":
-    import asyncio
-
-    # Properly create an event loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(main())
+    # ✅ Non-blocking bot startup
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
