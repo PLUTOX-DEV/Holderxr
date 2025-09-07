@@ -1,6 +1,5 @@
 import logging
 import os
-import asyncio
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 from bot.config import BOT_TOKEN
 from bot.db import init_db
@@ -14,7 +13,7 @@ logging.basicConfig(
 log = logging.getLogger("bot")
 
 
-async def main_async():
+def create_bot_app():
     token = BOT_TOKEN or os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set. Put it in .env or Render Environment Variables.")
@@ -32,9 +31,5 @@ async def main_async():
     # Schedule pin message
     app.job_queue.run_once(send_channel_pin, when=5)
 
-    log.info("Bot is running...")
-
-    # ✅ Non-blocking bot startup
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
+    log.info("🤖 Bot is ready (returning Application)...")
+    return app
