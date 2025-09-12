@@ -2,7 +2,7 @@ import os
 import psycopg2
 from contextlib import contextmanager
 
-DATABASE_URL = os.getenv("DATABASE_URL")  # Render/Pxxl will set this in env vars
+DATABASE_URL = os.getenv("DATABASE_URL")  # Render/Render-like env var
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS projects (
@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_network_contract
-ON projects (network, contract_address);
+    ON projects (network, contract_address);
 
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS users (
     joined_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX IF NOT EXISTS idx_users_telegram_id
+    ON users (telegram_id);
+
 CREATE TABLE IF NOT EXISTS states (
     id SERIAL PRIMARY KEY,
     telegram_id BIGINT NOT NULL UNIQUE,
@@ -37,18 +40,15 @@ CREATE TABLE IF NOT EXISTS states (
 '''
 
 
-def init_db():
-    """Initialize schema if not exists"""
-    with db() as con:
-        with con.cursor() as cur:
-            cur.execute(SCHEMA)
-
-
 @contextmanager
 def db():
-    # Make sslmode flexible:
-    if DATABASE_URL and "?sslmode=" not in DATABASE_URL:
-        dsn = f"{DATABASE_URL}?sslmode=disable"  # works with Pxxl
+    """Context manager for Postgres connection with flexible sslmode."""
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL not set")
+
+    # Render usually provides sslmode=require, but if not, default to disable
+    if "sslmode=" not in DATABASE_URL:
+        dsn = f"{DATABASE_URL}?sslmode=disable"
     else:
         dsn = DATABASE_URL
 
@@ -60,23 +60,52 @@ def db():
         con.close()
 
 
+def init_db():
+    """Initialize schema if not exists."""
+    with db() as con, con.cursor() as cur:
+        cur.execute(SCHEMA)
+
+
 def upsert_state(telegram_id: int, state: str | None, payload: str | None):
-    with db() as con:
-        with con.cursor() as cur:
-            if state is None:
-                cur.execute("DELETE FROM states WHERE telegram_id=%s", (telegram_id,))
-            else:
-                cur.execute("""
-                    INSERT INTO states (telegram_id, state, payload)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (telegram_id) DO UPDATE
-                    SET state = EXCLUDED.state, payload = EXCLUDED.payload
-                """, (telegram_id, state, payload or ""))
+    """Save or delete per-user FSM state."""
+    with db() as con, con.cursor() as cur:
+        if state is None:
+            cur.execute("DELETE FROM states WHERE telegram_id=%s", (telegram_id,))
+        else:
+            cur.execute("""
+                INSERT INTO states (telegram_id, state, payload)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (telegram_id) DO UPDATE
+                SET state = EXCLUDED.state, payload = EXCLUDED.payload
+            """, (telegram_id, state, payload or ""))
 
 
 def get_state(telegram_id: int):
-    with db() as con:
-        with con.cursor() as cur:
-            cur.execute("SELECT state, payload FROM states WHERE telegram_id=%s", (telegram_id,))
-            row = cur.fetchone()
-            return (row[0], row[1]) if row else (None, None)
+    """Return (state, payload) for a user or (None, None)."""
+    with db() as con, con.cursor() as cur:
+        cur.execute("SELECT state, payload FROM states WHERE telegram_id=%s", (telegram_id,))
+        row = cur.fetchone()
+        return (row[0], row[1]) if row else (None, None)
+
+
+def get_latest_project():
+    """Return the most recently created project (id, network, contract, link, channel) or None."""
+    with db() as con, con.cursor() as cur:
+        cur.execute(
+            "SELECT id, network, contract_address, group_invite_link, channel_chat_id "
+            "FROM projects ORDER BY id DESC LIMIT 1"
+        )
+        return cur.fetchone()
+
+
+def save_verified_user(telegram_id: int, username: str, project_id: int, wallet: str):
+    """Insert a verified user record."""
+    with db() as con, con.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO users (telegram_id, username, project_id, verified, wallet_address)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT DO NOTHING
+            """,
+            (telegram_id, username, project_id, 1, wallet),
+        )
