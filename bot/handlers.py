@@ -15,7 +15,7 @@ from .db import (
     get_state,
     get_latest_project,
     save_verified_user,
-    get_verified_users,  # we'll assume we create this helper
+    get_verified_users,
 )
 from .market import get_dexscreener_info, get_coingecko_info
 from .blockchain import is_token_holder
@@ -124,7 +124,7 @@ async def send_channel_pin(context: ContextTypes.DEFAULT_TYPE):
         "🔐 Requirements:\n"
         "• Human verification\n"
         "• Token holder check\n\n"
-        f"🌐 Network: *{NETWORKS.get(network, network)}*\n"
+        f"🌐 Network: *{escape_markdown(NETWORKS.get(network, network), version=2)}*\n"
         f"📄 Contract:\n`{escape_markdown(contract, version=2)}`\n\n"
         "👇 Click below to verify and join"
     )
@@ -161,10 +161,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _, network, contract, group_link, channel_id = project
         await q.edit_message_text(
             f"📊 *Current Project Info*\n\n"
-            f"• Network: {NETWORKS.get(network, network)}\n"
+            f"• Network: {escape_markdown(NETWORKS.get(network, network), version=2)}\n"
             f"• Contract:\n`{escape_markdown(contract, version=2)}`\n"
-            f"• Group Link: {group_link}\n"
-            f"• Channel ID: `{channel_id}`",
+            f"• Group Link: {escape_markdown(group_link or 'NO_LINK', version=2)}\n"
+            f"• Channel ID: `{escape_markdown(str(channel_id), version=2)}`",
             parse_mode="MarkdownV2",
             reply_markup=admin_dashboard_kb(),
         )
@@ -172,7 +172,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "admin_stats":
         users = get_verified_users()
-        user_list = "\n".join(f"• {escape_markdown(u[1], version=2)} ({escape_markdown(u[2], version=2)})" for u in users)
+        user_list = "\n".join(
+            f"• {escape_markdown(u[1], version=2)} ({escape_markdown(u[2], version=2)})"
+            for u in users
+        )
         text = f"👥 *Verified Users*\n\nTotal: **{len(users)}**\n\n{user_list or 'No verified users yet.'}"
 
         await q.edit_message_text(text, parse_mode="MarkdownV2", reply_markup=admin_dashboard_kb())
@@ -257,7 +260,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         upsert_state(uid, None, None)
-        await update.message.reply_text("✅ Project saved. Verification ad will be pinned.", parse_mode="MarkdownV2")
+        await update.message.reply_text(
+            "✅ Project saved. Verification ad will be pinned.", parse_mode="MarkdownV2"
+        )
         await send_channel_pin(context)
         return
 
