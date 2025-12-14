@@ -138,6 +138,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = q.from_user.id
     data = q.data
 
+    # ---------- ADMIN CONFIG ----------
     if data == "admin_config":
         upsert_state(uid, "CFG_OWNER", "{}")
         await safe_edit(q, "Send <b>owner username</b> (without @):", parse_mode="HTML")
@@ -163,7 +164,6 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await safe_edit(q, f"❌ Could not save contract: {e}")
             return
-
         upsert_state(uid, "CFG_GROUP", json.dumps({"project_id": p["project_id"]}))
         await safe_edit(q, "✅ Contract saved.\nSend group invite link or NO_LINK:")
         return
@@ -173,6 +173,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(q, "Send contract address again:")
         return
 
+    # ---------- PROJECT LIST ----------
     if data == "admin_project":
         rows = [
             [InlineKeyboardButton(
@@ -212,6 +213,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(q, "📌 Verification post re-pinned.", reply_markup=admin_dashboard_kb())
         return
 
+    # ---------- VERIFY ----------
     if data == "user_verify":
         a, b = random.randint(2, 9), random.randint(2, 9)
         upsert_state(uid, "VERIFY_MATH", json.dumps({"answer": a + b}))
@@ -227,21 +229,19 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     state, payload = get_state(uid)
 
+    # ---------- CONFIG FLOW ----------
     if state == "CFG_OWNER":
         with db() as con, con.cursor() as cur:
-            # Insert default network and contract_address to avoid later issues
+            # Insert default values for required fields
             cur.execute(
-                "INSERT INTO projects (owner_username, network, contract_address) "
-                "VALUES (%s, %s, %s) RETURNING id",
+                "INSERT INTO projects (owner_username, network, contract_address) VALUES (%s, %s, %s) RETURNING id",
                 (text, "eth", "0x0"),
             )
             pid = cur.fetchone()[0]
 
-        # Move to network selection
         upsert_state(uid, "CFG_NETWORK", json.dumps({"project_id": pid}))
         await update.message.reply_text("Select network:", reply_markup=network_select_kb())
         return
-
 
     if state == "CFG_CONTRACT":
         data_json = json.loads(payload)
@@ -252,18 +252,15 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Invalid contract. Send again:")
             return
 
-        # Save contract + network in state, do not touch DB yet
         upsert_state(
             uid,
             "CFG_CONTRACT_CONFIRM",
             json.dumps({"project_id": pid, "contract": text, "network": network, "meta": meta}),
         )
-
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Confirm", callback_data="confirm_contract")],
             [InlineKeyboardButton("❌ Re-enter", callback_data="retry_contract")],
         ])
-
         await update.message.reply_text(
             f"🔎 <b>Token Found</b>\n\n"
             f"Name: <b>{meta['name']}</b>\n"
@@ -289,6 +286,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🎉 Project fully configured!", reply_markup=admin_dashboard_kb())
         return
 
+    # ---------- VERIFY ----------
     if state == "VERIFY_MATH":
         if text.isdigit() and int(text) == json.loads(payload)["answer"]:
             upsert_state(uid, "VERIFY_WALLET", "{}")
