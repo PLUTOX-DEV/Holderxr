@@ -1,6 +1,8 @@
 import os
 import psycopg2
+import psycopg2.extras  # Fix: import extras for RealDictCursor
 from contextlib import contextmanager
+from typing import Optional, List, Dict, Tuple
 
 # Render / Supabase / Neon usually expose DATABASE_URL
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -42,8 +44,10 @@ CREATE TABLE IF NOT EXISTS states (
 
 @contextmanager
 def db():
+    """PostgreSQL connection context manager with SSL enforcement."""
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL environment variable not set")
+
     dsn = f"{DATABASE_URL}?sslmode=require" if "sslmode=" not in DATABASE_URL else DATABASE_URL
     con = psycopg2.connect(dsn)
     try:
@@ -54,11 +58,13 @@ def db():
 
 
 def init_db():
+    """Initialize database schema."""
     with db() as con, con.cursor() as cur:
         cur.execute(SCHEMA)
 
 
-def upsert_state(telegram_id: int, state: str | None, payload: str | None):
+def upsert_state(telegram_id: int, state: Optional[str], payload: Optional[str]):
+    """Insert or update FSM state for a user."""
     with db() as con, con.cursor() as cur:
         if state is None:
             cur.execute("DELETE FROM states WHERE telegram_id = %s", (telegram_id,))
@@ -74,14 +80,16 @@ def upsert_state(telegram_id: int, state: str | None, payload: str | None):
             )
 
 
-def get_state(telegram_id: int):
+def get_state(telegram_id: int) -> Tuple[Optional[str], Optional[str]]:
+    """Get FSM state for a user."""
     with db() as con, con.cursor() as cur:
         cur.execute("SELECT state, payload FROM states WHERE telegram_id = %s", (telegram_id,))
         row = cur.fetchone()
         return (row[0], row[1]) if row else (None, None)
 
 
-def get_latest_project():
+def get_latest_project() -> Optional[Tuple[int, str, str, Optional[str], Optional[str]]]:
+    """Get the most recently created project."""
     with db() as con, con.cursor() as cur:
         cur.execute(
             """
@@ -95,6 +103,7 @@ def get_latest_project():
 
 
 def save_verified_user(telegram_id: int, username: str, project_id: int, wallet: str):
+    """Save a verified Telegram user."""
     with db() as con, con.cursor() as cur:
         cur.execute(
             """
@@ -106,14 +115,14 @@ def save_verified_user(telegram_id: int, username: str, project_id: int, wallet:
         )
 
 
-def get_verified_users(project_id: int | None = None):
+def get_verified_users(project_id: Optional[int] = None) -> List[Dict]:
     """
     Return list of verified users.
     Each user is a dict: {id, telegram_id, username, wallet_address, joined_at}
     Optional filter by project_id.
     """
     with db() as con, con.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        if project_id:
+        if project_id is not None:
             cur.execute(
                 """
                 SELECT id, telegram_id, username, wallet_address, joined_at
