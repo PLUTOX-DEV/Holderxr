@@ -79,24 +79,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     project = get_latest_project()
-    group_link = project[3] if project else None
+    group_link = project.get("group_invite_link") if project else None
     await update.message.reply_text(
         "🚀 Welcome! Verify to join the community.",
         reply_markup=join_community_kb(group_link),
         parse_mode=None,
     )
 
-
-async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        await update.message.reply_text("❌ You are not authorized.", parse_mode=None)
-        return
-
-    await update.message.reply_text(
-        "🧠 Admin Dashboard",
-        reply_markup=admin_dashboard_kb(),
-        parse_mode=None,
-    )
 
 # ---------------------------
 # Channel Pin / Ad
@@ -107,7 +96,10 @@ async def send_channel_pin(context: ContextTypes.DEFAULT_TYPE):
     if not project:
         return
 
-    _, network, contract, group_link, channel_id = project
+    network = project["network"]
+    contract = project["contract_address"]
+    group_link = project.get("group_invite_link")
+    channel_id = project.get("channel_chat_id")
 
     text = (
         "🚀 HOLDERS-ONLY ACCESS\n\n"
@@ -132,6 +124,7 @@ async def send_channel_pin(context: ContextTypes.DEFAULT_TYPE):
     )
     await context.bot.pin_chat_message(channel_id, msg.message_id, disable_notification=True)
 
+
 # ---------------------------
 # Buttons
 # ---------------------------
@@ -141,7 +134,6 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     data = q.data
 
-    # ---------- MULTI-PROJECT ADMIN ----------
     if data == "admin_project":
         projects = get_all_projects()
         if not projects:
@@ -150,7 +142,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         rows = []
         for p in projects:
-            project_id, owner, network, contract, group_link, channel_id = p
+            project_id = p["id"]
+            network = p["network"]
+            contract = p["contract_address"]
             rows.append([InlineKeyboardButton(f"{network}-{contract[:6]}...", callback_data=f"project:{project_id}")])
 
         await q.edit_message_text(
@@ -162,12 +156,17 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("project:"):
         project_id = int(data.split(":")[1])
-        project = next((p for p in get_all_projects() if p[0] == project_id), None)
+        project = next((p for p in get_all_projects() if p["id"] == project_id), None)
         if not project:
             await q.edit_message_text("Project not found.", parse_mode=None)
             return
 
-        _, owner, network, contract, group_link, channel_id = project
+        owner = project["owner_username"]
+        network = project["network"]
+        contract = project["contract_address"]
+        group_link = project.get("group_invite_link")
+        channel_id = project.get("channel_chat_id")
+
         text = (
             f"📊 Project Info\n\n"
             f"• Owner: {owner}\n"
@@ -216,6 +215,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         upsert_state(q.from_user.id, "VERIFY_MATH", json.dumps({"answer": a + b}))
         await q.edit_message_text(f"🧠 Human check: {a} + {b} ?", parse_mode=None)
         return
+
 
 # ---------------------------
 # Messages
@@ -272,7 +272,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("No project configured.", parse_mode=None)
             return
 
-        project_id, network, contract, group_link, channel_id = project
+        project_id = project["id"]
+        network = project["network"]
+        contract = project["contract_address"]
+        group_link = project.get("group_invite_link")
+        channel_id = project.get("channel_chat_id")
 
         if network in ("eth", "base", "bsc") and not re.fullmatch(r"0x[a-fA-F0-9]{40}", text):
             await update.message.reply_text("Invalid wallet address.", parse_mode=None)
@@ -306,7 +310,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ---------- FALLBACK ----------
     project = get_latest_project()
-    group_link = project[3] if project else None
+    group_link = project.get("group_invite_link") if project else None
     await update.message.reply_text(
         "Tap ✅ Verify to start verification.",
         reply_markup=join_community_kb(group_link),
