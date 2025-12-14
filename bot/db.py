@@ -1,10 +1,10 @@
 import os
 import psycopg2
-import psycopg2.extras  # Fix: import extras for RealDictCursor
+import psycopg2.extras
 from contextlib import contextmanager
 from typing import Optional, List, Dict, Tuple
 
-# Render / Supabase / Neon usually expose DATABASE_URL
+# Database URL from environment variables
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 SCHEMA = """
@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS states (
 );
 """
 
+# Context manager for database connection
 @contextmanager
 def db():
     """PostgreSQL connection context manager with SSL enforcement."""
@@ -63,6 +64,7 @@ def init_db():
         cur.execute(SCHEMA)
 
 
+# ===== States (FSM) =====
 def upsert_state(telegram_id: int, state: Optional[str], payload: Optional[str]):
     """Insert or update FSM state for a user."""
     with db() as con, con.cursor() as cur:
@@ -88,12 +90,13 @@ def get_state(telegram_id: int) -> Tuple[Optional[str], Optional[str]]:
         return (row[0], row[1]) if row else (None, None)
 
 
-def get_latest_project() -> Optional[Tuple[int, str, str, Optional[str], Optional[str]]]:
+# ===== Projects =====
+def get_latest_project() -> Optional[Dict]:
     """Get the most recently created project."""
-    with db() as con, con.cursor() as cur:
+    with db() as con, con.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             """
-            SELECT id, network, contract_address, group_invite_link, channel_chat_id
+            SELECT id, owner_username, network, contract_address, group_invite_link, channel_chat_id, created_at
             FROM projects
             ORDER BY id DESC
             LIMIT 1
@@ -102,6 +105,23 @@ def get_latest_project() -> Optional[Tuple[int, str, str, Optional[str], Optiona
         return cur.fetchone()
 
 
+def get_all_projects() -> List[Dict]:
+    """
+    Return a list of all projects.
+    Each project is a dict: {id, owner_username, network, contract_address, group_invite_link, channel_chat_id, created_at}
+    """
+    with db() as con, con.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT id, owner_username, network, contract_address, group_invite_link, channel_chat_id, created_at
+            FROM projects
+            ORDER BY created_at DESC
+            """
+        )
+        return cur.fetchall()
+
+
+# ===== Users =====
 def save_verified_user(telegram_id: int, username: str, project_id: int, wallet: str):
     """Save a verified Telegram user."""
     with db() as con, con.cursor() as cur:
@@ -142,3 +162,11 @@ def get_verified_users(project_id: Optional[int] = None) -> List[Dict]:
                 """
             )
         return cur.fetchall()
+
+
+# ===== Project Deletion =====
+def delete_project(project_id: int):
+    """Delete a project by ID along with its associated users (cascade)."""
+    with db() as con, con.cursor() as cur:
+        cur.execute("DELETE FROM projects WHERE id = %s", (project_id,))
+
