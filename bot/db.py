@@ -40,22 +40,11 @@ CREATE TABLE IF NOT EXISTS states (
 );
 """
 
-
 @contextmanager
 def db():
-    """
-    PostgreSQL connection context manager.
-    Enforces SSL (required by Render, Supabase, Neon).
-    """
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL environment variable not set")
-
-    # Ensure SSL is always enabled
-    if "sslmode=" not in DATABASE_URL:
-        dsn = f"{DATABASE_URL}?sslmode=require"
-    else:
-        dsn = DATABASE_URL
-
+    dsn = f"{DATABASE_URL}?sslmode=require" if "sslmode=" not in DATABASE_URL else DATABASE_URL
     con = psycopg2.connect(dsn)
     try:
         yield con
@@ -65,46 +54,34 @@ def db():
 
 
 def init_db():
-    """Initialize database schema."""
     with db() as con, con.cursor() as cur:
         cur.execute(SCHEMA)
 
 
 def upsert_state(telegram_id: int, state: str | None, payload: str | None):
-    """Insert or update FSM state for a user."""
     with db() as con, con.cursor() as cur:
         if state is None:
-            cur.execute(
-                "DELETE FROM states WHERE telegram_id = %s",
-                (telegram_id,),
-            )
+            cur.execute("DELETE FROM states WHERE telegram_id = %s", (telegram_id,))
         else:
             cur.execute(
                 """
                 INSERT INTO states (telegram_id, state, payload)
                 VALUES (%s, %s, %s)
                 ON CONFLICT (telegram_id)
-                DO UPDATE SET
-                    state = EXCLUDED.state,
-                    payload = EXCLUDED.payload
+                DO UPDATE SET state = EXCLUDED.state, payload = EXCLUDED.payload
                 """,
                 (telegram_id, state, payload or ""),
             )
 
 
 def get_state(telegram_id: int):
-    """Get FSM state for a user."""
     with db() as con, con.cursor() as cur:
-        cur.execute(
-            "SELECT state, payload FROM states WHERE telegram_id = %s",
-            (telegram_id,),
-        )
+        cur.execute("SELECT state, payload FROM states WHERE telegram_id = %s", (telegram_id,))
         row = cur.fetchone()
         return (row[0], row[1]) if row else (None, None)
 
 
 def get_latest_project():
-    """Get the most recently created project."""
     with db() as con, con.cursor() as cur:
         cur.execute(
             """
@@ -117,20 +94,42 @@ def get_latest_project():
         return cur.fetchone()
 
 
-def save_verified_user(
-    telegram_id: int,
-    username: str,
-    project_id: int,
-    wallet: str,
-):
-    """Save a verified Telegram user."""
+def save_verified_user(telegram_id: int, username: str, project_id: int, wallet: str):
     with db() as con, con.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO users
-                (telegram_id, username, project_id, verified, wallet_address)
+            INSERT INTO users (telegram_id, username, project_id, verified, wallet_address)
             VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT DO NOTHING
             """,
             (telegram_id, username, project_id, 1, wallet),
         )
+
+
+def get_verified_users(project_id: int | None = None):
+    """
+    Return list of verified users.
+    Each user is a dict: {id, telegram_id, username, wallet_address, joined_at}
+    Optional filter by project_id.
+    """
+    with db() as con, con.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        if project_id:
+            cur.execute(
+                """
+                SELECT id, telegram_id, username, wallet_address, joined_at
+                FROM users
+                WHERE verified = 1 AND project_id = %s
+                ORDER BY joined_at DESC
+                """,
+                (project_id,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id, telegram_id, username, wallet_address, joined_at
+                FROM users
+                WHERE verified = 1
+                ORDER BY joined_at DESC
+                """
+            )
+        return cur.fetchall()
