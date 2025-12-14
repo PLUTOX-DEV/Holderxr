@@ -6,7 +6,6 @@ import re
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from telegram.helpers import escape_markdown
 
 from .config import ADMIN_USERNAMES, NETWORKS, DEFAULT_MIN_AMOUNT, BOT_USERNAME
 from .db import (
@@ -21,7 +20,6 @@ from .market import get_dexscreener_info, get_coingecko_info
 from .blockchain import is_token_holder
 
 logger = logging.getLogger(__name__)
-
 
 # ---------------------------
 # Helpers
@@ -56,7 +54,6 @@ def join_community_kb(group_link: str):
         [[InlineKeyboardButton("👥 Join Community", url=group_link)]]
     )
 
-
 # ---------------------------
 # Commands
 # ---------------------------
@@ -64,46 +61,40 @@ def join_community_kb(group_link: str):
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
 
-    # Deep link verify
     if args and args[0] == "verify":
         await update.message.reply_text(
-            escape_markdown(
-                "🚀 *Token Holder Verification*\n\nThis community is restricted to *real holders only*.\n\n👇 Tap **Verify** to begin.",
-                version=2,
-            ),
+            "🚀 Token Holder Verification\n\nThis community is restricted to real holders only.\n\n👇 Tap ✅ Verify to begin.",
             reply_markup=verify_kb(),
-            parse_mode="MarkdownV2",
+            parse_mode=None,
         )
         return
 
-    # Admin start
     if is_admin(update):
         await update.message.reply_text(
-            "🧠 *Admin Dashboard*",
+            "🧠 Admin Dashboard",
             reply_markup=admin_dashboard_kb(),
-            parse_mode="MarkdownV2",
+            parse_mode=None,
         )
         return
 
-    # Normal user
     project = get_latest_project()
     group_link = project[3] if project else None
     await update.message.reply_text(
         "🚀 Welcome! Verify to join the community.",
         reply_markup=join_community_kb(group_link),
-        parse_mode="MarkdownV2",
+        parse_mode=None,
     )
 
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
-        await update.message.reply_text("❌ You are not authorized.")
+        await update.message.reply_text("❌ You are not authorized.", parse_mode=None)
         return
 
     await update.message.reply_text(
-        "🧠 *Admin Dashboard*",
+        "🧠 Admin Dashboard",
         reply_markup=admin_dashboard_kb(),
-        parse_mode="MarkdownV2",
+        parse_mode=None,
     )
 
 
@@ -119,13 +110,13 @@ async def send_channel_pin(context: ContextTypes.DEFAULT_TYPE):
     _, network, contract, group_link, channel_id = project
 
     text = (
-        "🚀 *HOLDERS-ONLY ACCESS*\n\n"
+        "🚀 HOLDERS-ONLY ACCESS\n\n"
         "This group is protected by an on-chain verification bot.\n\n"
         "🔐 Requirements:\n"
         "• Human verification\n"
         "• Token holder check\n\n"
-        f"🌐 Network: *{escape_markdown(NETWORKS.get(network, network), version=2)}*\n"
-        f"📄 Contract:\n`{escape_markdown(contract, version=2)}`\n\n"
+        f"🌐 Network: {NETWORKS.get(network, network)}\n"
+        f"📄 Contract: {contract}\n\n"
         "👇 Click below to verify and join"
     )
 
@@ -137,7 +128,7 @@ async def send_channel_pin(context: ContextTypes.DEFAULT_TYPE):
         chat_id=channel_id,
         text=text,
         reply_markup=kb,
-        parse_mode="MarkdownV2",
+        parse_mode=None,
     )
     await context.bot.pin_chat_message(channel_id, msg.message_id, disable_notification=True)
 
@@ -151,34 +142,29 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     data = q.data
 
-    # ---------- ADMIN ----------
     if data == "admin_project":
         project = get_latest_project()
         if not project:
-            await q.edit_message_text("No project configured.")
+            await q.edit_message_text("No project configured.", parse_mode=None)
             return
 
         _, network, contract, group_link, channel_id = project
         await q.edit_message_text(
-            f"📊 *Current Project Info*\n\n"
-            f"• Network: {escape_markdown(NETWORKS.get(network, network), version=2)}\n"
-            f"• Contract:\n`{escape_markdown(contract, version=2)}`\n"
-            f"• Group Link: {escape_markdown(group_link or 'NO_LINK', version=2)}\n"
-            f"• Channel ID: `{escape_markdown(str(channel_id), version=2)}`",
-            parse_mode="MarkdownV2",
+            f"📊 Current Project Info\n\n"
+            f"• Network: {NETWORKS.get(network, network)}\n"
+            f"• Contract: {contract}\n"
+            f"• Group Link: {group_link or 'NO_LINK'}\n"
+            f"• Channel ID: {channel_id}",
+            parse_mode=None,
             reply_markup=admin_dashboard_kb(),
         )
         return
 
     if data == "admin_stats":
         users = get_verified_users()
-        user_list = "\n".join(
-            f"• {escape_markdown(u[1], version=2)} ({escape_markdown(u[2], version=2)})"
-            for u in users
-        )
-        text = f"👥 *Verified Users*\n\nTotal: **{len(users)}**\n\n{user_list or 'No verified users yet.'}"
-
-        await q.edit_message_text(text, parse_mode="MarkdownV2", reply_markup=admin_dashboard_kb())
+        user_list = "\n".join(f"• {u[1]} ({u[2]})" for u in users)
+        text = f"👥 Verified Users\n\nTotal: {len(users)}\n\n{user_list or 'No verified users yet.'}"
+        await q.edit_message_text(text, parse_mode=None, reply_markup=admin_dashboard_kb())
         return
 
     if data == "admin_repin":
@@ -186,6 +172,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(
             "📣 Verification ad re-pinned successfully.",
             reply_markup=admin_dashboard_kb(),
+            parse_mode=None,
         )
         return
 
@@ -198,14 +185,13 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 row = []
         if row:
             rows.append(row)
-        await q.edit_message_text("Select network:", reply_markup=InlineKeyboardMarkup(rows))
+        await q.edit_message_text("Select network:", reply_markup=InlineKeyboardMarkup(rows), parse_mode=None)
         return
 
-    # ---------- USER VERIFY ----------
     if data == "user_verify":
         a, b = random.randint(2, 9), random.randint(2, 9)
         upsert_state(q.from_user.id, "VERIFY_MATH", json.dumps({"answer": a + b}))
-        await q.edit_message_text(f"🧠 Human check: *{a} + {b}* ?", parse_mode="MarkdownV2")
+        await q.edit_message_text(f"🧠 Human check: {a} + {b} ?", parse_mode=None)
         return
 
 
@@ -218,14 +204,12 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     state, payload = get_state(uid)
 
-    # ---------- ADMIN SETUP ----------
     if state == "SET_CONTRACT":
         data = json.loads(payload or "{}")
         data["contract"] = text
         upsert_state(uid, "SET_GROUP_LINK", json.dumps(data))
-
         await update.message.reply_text(
-            "✅ Contract saved.\n\nSend the *private group invite link* or `NO_LINK`.", parse_mode="MarkdownV2"
+            "✅ Contract saved.\n\nSend the private group invite link or NO_LINK.", parse_mode=None
         )
         return
 
@@ -233,10 +217,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = json.loads(payload or "{}")
         data["group_link"] = text
         upsert_state(uid, "SET_CHANNEL", json.dumps(data))
-
-        await update.message.reply_text(
-            "Now send the *channel username* or *chat_id*.", parse_mode="MarkdownV2"
-        )
+        await update.message.reply_text("Now send the channel username or chat_id.", parse_mode=None)
         return
 
     if state == "SET_CHANNEL":
@@ -258,44 +239,41 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     text,
                 ),
             )
-
         upsert_state(uid, None, None)
         await update.message.reply_text(
-            "✅ Project saved. Verification ad will be pinned.", parse_mode="MarkdownV2"
+            "✅ Project saved. Verification ad will be pinned.", parse_mode=None
         )
         await send_channel_pin(context)
         return
 
-    # ---------- VERIFY ----------
     if state == "VERIFY_MATH":
         data = json.loads(payload or "{}")
         if text.isdigit() and int(text) == int(data["answer"]):
             upsert_state(uid, "VERIFY_WALLET", "{}")
-            await update.message.reply_text("✅ Passed. Send wallet address:", parse_mode="MarkdownV2")
+            await update.message.reply_text("✅ Passed. Send wallet address:", parse_mode=None)
         else:
             upsert_state(uid, None, None)
-            await update.message.reply_text("❌ Wrong answer.", reply_markup=verify_kb(), parse_mode="MarkdownV2")
+            await update.message.reply_text("❌ Wrong answer.", reply_markup=verify_kb(), parse_mode=None)
         return
 
     if state == "VERIFY_WALLET":
         project = get_latest_project()
         if not project:
-            await update.message.reply_text("No project configured.", parse_mode="MarkdownV2")
+            await update.message.reply_text("No project configured.", parse_mode=None)
             return
 
         project_id, network, contract, group_link, channel_id = project
 
         if network in ("eth", "base", "bsc") and not re.fullmatch(r"0x[a-fA-F0-9]{40}", text):
-            await update.message.reply_text("Invalid wallet address.", parse_mode="MarkdownV2")
+            await update.message.reply_text("Invalid wallet address.", parse_mode=None)
             return
 
         if not is_token_holder(network, text, contract, DEFAULT_MIN_AMOUNT):
-            await update.message.reply_text("❌ You do not hold the token.", reply_markup=verify_kb(), parse_mode="MarkdownV2")
+            await update.message.reply_text("❌ You do not hold the token.", reply_markup=verify_kb(), parse_mode=None)
             return
 
         save_verified_user(uid, update.effective_user.username or "", project_id, text)
 
-        # Try auto-approve, otherwise provide join link
         approved = False
         if channel_id and str(channel_id).lower() not in ("", "none"):
             try:
@@ -305,22 +283,21 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
         if approved:
-            await update.message.reply_text("🎉 Verified! Auto-approved to join the group.", parse_mode="MarkdownV2")
+            await update.message.reply_text("🎉 Verified! Auto-approved to join the group.", parse_mode=None)
         else:
             await update.message.reply_text(
                 "🎉 Verified!\nUse the button below to join the community.",
                 reply_markup=join_community_kb(group_link),
-                parse_mode="MarkdownV2",
+                parse_mode=None,
             )
 
         upsert_state(uid, None, None)
         return
 
-    # ---------- Fallback ----------
     project = get_latest_project()
     group_link = project[3] if project else None
     await update.message.reply_text(
         "Tap ✅ Verify to start verification.",
         reply_markup=join_community_kb(group_link),
-        parse_mode="MarkdownV2",
+        parse_mode=None,
     )
