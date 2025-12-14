@@ -13,10 +13,11 @@ from .db import (
     upsert_state,
     get_state,
     get_latest_project,
+    get_all_projects,
     save_verified_user,
     get_verified_users,
+    delete_project,
 )
-from .market import get_dexscreener_info, get_coingecko_info
 from .blockchain import is_token_holder
 
 logger = logging.getLogger(__name__)
@@ -97,7 +98,6 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=None,
     )
 
-
 # ---------------------------
 # Channel Pin / Ad
 # ---------------------------
@@ -132,7 +132,6 @@ async def send_channel_pin(context: ContextTypes.DEFAULT_TYPE):
     )
     await context.bot.pin_chat_message(channel_id, msg.message_id, disable_notification=True)
 
-
 # ---------------------------
 # Buttons
 # ---------------------------
@@ -142,50 +141,74 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     data = q.data
 
+    # ---------- MULTI-PROJECT ADMIN ----------
     if data == "admin_project":
-        project = get_latest_project()
-        if not project:
-            await q.edit_message_text("No project configured.", parse_mode=None)
+        projects = get_all_projects()
+        if not projects:
+            await q.edit_message_text("No projects configured.", parse_mode=None)
             return
 
-        _, network, contract, group_link, channel_id = project
+        rows = []
+        for p in projects:
+            project_id, owner, network, contract, group_link, channel_id = p
+            rows.append([InlineKeyboardButton(f"{network}-{contract[:6]}...", callback_data=f"project:{project_id}")])
+
         await q.edit_message_text(
-            f"📊 Current Project Info\n\n"
-            f"• Network: {NETWORKS.get(network, network)}\n"
+            "Select a project to view / edit:",
+            reply_markup=InlineKeyboardMarkup(rows),
+            parse_mode=None
+        )
+        return
+
+    if data.startswith("project:"):
+        project_id = int(data.split(":")[1])
+        project = next((p for p in get_all_projects() if p[0] == project_id), None)
+        if not project:
+            await q.edit_message_text("Project not found.", parse_mode=None)
+            return
+
+        _, owner, network, contract, group_link, channel_id = project
+        text = (
+            f"📊 Project Info\n\n"
+            f"• Owner: {owner}\n"
+            f"• Network: {network}\n"
             f"• Contract: {contract}\n"
             f"• Group Link: {group_link or 'NO_LINK'}\n"
-            f"• Channel ID: {channel_id}",
-            parse_mode=None,
-            reply_markup=admin_dashboard_kb(),
+            f"• Channel ID: {channel_id}\n\n"
+            f"Select an action:"
         )
+
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📝 Edit", callback_data=f"edit:{project_id}")],
+            [InlineKeyboardButton("🗑 Delete", callback_data=f"delete:{project_id}")],
+            [InlineKeyboardButton("⬅ Back", callback_data="admin_project")],
+        ])
+        await q.edit_message_text(text, reply_markup=kb, parse_mode=None)
+        return
+
+    if data.startswith("delete:"):
+        project_id = int(data.split(":")[1])
+        delete_project(project_id)
+        await q.edit_message_text("✅ Project deleted.", parse_mode=None)
+        await on_button(update, context)
+        return
+
+    if data.startswith("edit:"):
+        project_id = int(data.split(":")[1])
+        upsert_state(q.from_user.id, "EDIT_PROJECT_CONTRACT", json.dumps({"project_id": project_id}))
+        await q.edit_message_text("Send the new contract address for this project:", parse_mode=None)
         return
 
     if data == "admin_stats":
         users = get_verified_users()
-        user_list = "\n".join(f"• {u[1]} ({u[2]})" for u in users)
+        user_list = "\n".join(f"• {u['username']} ({u['wallet_address']})" for u in users)
         text = f"👥 Verified Users\n\nTotal: {len(users)}\n\n{user_list or 'No verified users yet.'}"
         await q.edit_message_text(text, parse_mode=None, reply_markup=admin_dashboard_kb())
         return
 
     if data == "admin_repin":
         await send_channel_pin(context)
-        await q.edit_message_text(
-            "📣 Verification ad re-pinned successfully.",
-            reply_markup=admin_dashboard_kb(),
-            parse_mode=None,
-        )
-        return
-
-    if data == "admin_config":
-        rows, row = [], []
-        for key, name in NETWORKS.items():
-            row.append(InlineKeyboardButton(name, callback_data=f"net:{key}"))
-            if len(row) == 2:
-                rows.append(row)
-                row = []
-        if row:
-            rows.append(row)
-        await q.edit_message_text("Select network:", reply_markup=InlineKeyboardMarkup(rows), parse_mode=None)
+        await q.edit_message_text("📣 Verification ad re-pinned successfully.", reply_markup=admin_dashboard_kb(), parse_mode=None)
         return
 
     if data == "user_verify":
@@ -193,7 +216,6 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         upsert_state(q.from_user.id, "VERIFY_MATH", json.dumps({"answer": a + b}))
         await q.edit_message_text(f"🧠 Human check: {a} + {b} ?", parse_mode=None)
         return
-
 
 # ---------------------------
 # Messages
@@ -204,48 +226,35 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     state, payload = get_state(uid)
 
-    if state == "SET_CONTRACT":
+    # ---------- EDIT PROJECT FLOW ----------
+    if state == "EDIT_PROJECT_CONTRACT":
         data = json.loads(payload or "{}")
-        data["contract"] = text
-        upsert_state(uid, "SET_GROUP_LINK", json.dumps(data))
-        await update.message.reply_text(
-            "✅ Contract saved.\n\nSend the private group invite link or NO_LINK.", parse_mode=None
-        )
-        return
-
-    if state == "SET_GROUP_LINK":
-        data = json.loads(payload or "{}")
-        data["group_link"] = text
-        upsert_state(uid, "SET_CHANNEL", json.dumps(data))
-        await update.message.reply_text("Now send the channel username or chat_id.", parse_mode=None)
-        return
-
-    if state == "SET_CHANNEL":
-        data = json.loads(payload or "{}")
+        project_id = data["project_id"]
         with db() as con, con.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO projects (owner_username, network, contract_address, group_invite_link, channel_chat_id)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (network, contract_address) DO UPDATE
-                SET group_invite_link = EXCLUDED.group_invite_link,
-                    channel_chat_id = EXCLUDED.channel_chat_id
-                """,
-                (
-                    update.effective_user.username or "",
-                    data["network"],
-                    data["contract"],
-                    data["group_link"],
-                    text,
-                ),
-            )
-        upsert_state(uid, None, None)
-        await update.message.reply_text(
-            "✅ Project saved. Verification ad will be pinned.", parse_mode=None
-        )
-        await send_channel_pin(context)
+            cur.execute("UPDATE projects SET contract_address=%s WHERE id=%s", (text, project_id))
+        upsert_state(uid, "EDIT_PROJECT_GROUP", json.dumps({"project_id": project_id}))
+        await update.message.reply_text("✅ Contract updated. Send the new group link or NO_LINK.", parse_mode=None)
         return
 
+    if state == "EDIT_PROJECT_GROUP":
+        data = json.loads(payload or "{}")
+        project_id = data["project_id"]
+        with db() as con, con.cursor() as cur:
+            cur.execute("UPDATE projects SET group_invite_link=%s WHERE id=%s", (text, project_id))
+        upsert_state(uid, "EDIT_PROJECT_CHANNEL", json.dumps({"project_id": project_id}))
+        await update.message.reply_text("✅ Group link updated. Send the new channel username or chat_id.", parse_mode=None)
+        return
+
+    if state == "EDIT_PROJECT_CHANNEL":
+        data = json.loads(payload or "{}")
+        project_id = data["project_id"]
+        with db() as con, con.cursor() as cur:
+            cur.execute("UPDATE projects SET channel_chat_id=%s WHERE id=%s", (text, project_id))
+        upsert_state(uid, None, None)
+        await update.message.reply_text("✅ Project fully updated!", parse_mode=None)
+        return
+
+    # ---------- VERIFY MATH ----------
     if state == "VERIFY_MATH":
         data = json.loads(payload or "{}")
         if text.isdigit() and int(text) == int(data["answer"]):
@@ -256,6 +265,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Wrong answer.", reply_markup=verify_kb(), parse_mode=None)
         return
 
+    # ---------- VERIFY WALLET ----------
     if state == "VERIFY_WALLET":
         project = get_latest_project()
         if not project:
@@ -294,6 +304,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         upsert_state(uid, None, None)
         return
 
+    # ---------- FALLBACK ----------
     project = get_latest_project()
     group_link = project[3] if project else None
     await update.message.reply_text(
