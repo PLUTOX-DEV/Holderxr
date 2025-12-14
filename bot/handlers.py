@@ -17,7 +17,7 @@ from .db import (
     get_verified_users,
     delete_project,
 )
-from .blockchain import is_token_holder
+from .blockchain import is_token_holder, get_token_meta
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +56,7 @@ def join_community_kb(group_link: str | None):
 
 
 def network_select_kb():
-    rows = []
-    row = []
+    rows, row = [], []
     for key, label in NETWORKS.items():
         row.append(InlineKeyboardButton(label, callback_data=f"cfg_network:{key}"))
         if len(row) == 2:
@@ -76,10 +75,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if args and args[0] == "verify":
         await update.message.reply_text(
-            "🚀 Token Holder Verification\n\n"
-            "This community is restricted to real holders only.\n\n"
-            "👇 Tap ✅ Verify to begin.",
+            "🚀 <b>Token Holder Verification</b>\n\nTap below to start.",
             reply_markup=verify_kb(),
+            parse_mode="HTML",
         )
         return
 
@@ -88,22 +86,17 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     project = get_latest_project()
-    group_link = project.get("group_invite_link") if project else None
-
     await update.message.reply_text(
         "🚀 Welcome! Verify to join the community.",
-        reply_markup=join_community_kb(group_link),
+        reply_markup=join_community_kb(project.get("group_invite_link") if project else None),
     )
 
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        await update.message.reply_text("❌ You are not authorized.")
-        return
-
     await update.message.reply_text(
-        "🧠 Admin Dashboard",
+        "🧠 <b>Admin Dashboard</b>",
         reply_markup=admin_dashboard_kb(),
+        parse_mode="HTML",
     )
 
 # ===========================
@@ -112,15 +105,14 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def send_channel_pin(context: ContextTypes.DEFAULT_TYPE):
     project = get_latest_project()
-    if not project:
+    if not project or not project.get("channel_chat_id"):
         return
 
     text = (
-        "🚀 HOLDERS-ONLY ACCESS\n\n"
-        "This group is protected by an on-chain verification bot.\n\n"
-        f"🌐 Network: {NETWORKS.get(project['network'], project['network'])}\n"
-        f"📄 Contract: {project['contract_address']}\n\n"
-        "👇 Click below to verify and join"
+        "🚀 <b>HOLDERS-ONLY ACCESS</b>\n\n"
+        f"🌐 <b>Network:</b> {NETWORKS.get(project['network'])}\n"
+        f"📄 <b>Contract:</b> <code>{project['contract_address']}</code>\n\n"
+        "👇 Click below to verify"
     )
 
     kb = InlineKeyboardMarkup(
@@ -131,6 +123,7 @@ async def send_channel_pin(context: ContextTypes.DEFAULT_TYPE):
         chat_id=project["channel_chat_id"],
         text=text,
         reply_markup=kb,
+        parse_mode="HTML",
     )
 
     await context.bot.pin_chat_message(
@@ -146,13 +139,13 @@ async def send_channel_pin(context: ContextTypes.DEFAULT_TYPE):
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    data = q.data
     uid = q.from_user.id
+    data = q.data
 
-    # ---------- CONFIG ----------
+    # ---------- ADMIN CONFIG ----------
     if data == "admin_config":
         upsert_state(uid, "CFG_OWNER", "{}")
-        await q.edit_message_text("Send *owner username* (without @):", parse_mode="Markdown")
+        await q.edit_message_text("Send <b>owner username</b> (without @):", parse_mode="HTML")
         return
 
     if data.startswith("cfg_network:"):
@@ -166,29 +159,53 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("Send contract address:")
         return
 
-    # ---------- PROJECTS ----------
-    if data == "admin_project":
-        projects = get_all_projects()
-        rows = [
-            [InlineKeyboardButton(
-                f"{NETWORKS.get(p['network'], p['network'])} • {p['contract_address'][:6]}…",
-                callback_data=f"project:{p['id']}"
-            )]
-            for p in projects
-        ]
-        await q.edit_message_text("Select a project:", reply_markup=InlineKeyboardMarkup(rows))
+    # ---------- CONTRACT CONFIRM ----------
+    if data == "confirm_contract":
+        state, payload = get_state(uid)
+        p = json.loads(payload)
+
+        with db() as con, con.cursor() as cur:
+            cur.execute(
+                "UPDATE projects SET contract_address=%s WHERE id=%s",
+                (p["contract"], p["project_id"]),
+            )
+
+        upsert_state(uid, "CFG_GROUP", json.dumps({"project_id": p["project_id"]}))
+        await q.edit_message_text("✅ Contract saved.\nSend group invite link or NO_LINK:")
         return
 
+    if data == "retry_contract":
+        upsert_state(uid, "CFG_CONTRACT", get_state(uid)[1])
+        await q.edit_message_text("Send contract address again:")
+        return
+
+    # ---------- PROJECT LIST ----------
+    if data == "admin_project":
+        rows = [
+            [InlineKeyboardButton(
+                f"{NETWORKS.get(p['network'])} • {p['contract_address'][:6]}…",
+                callback_data=f"project:{p['id']}"
+            )]
+            for p in get_all_projects()
+        ]
+        await q.edit_message_text(
+            "Select a project:",
+            reply_markup=InlineKeyboardMarkup(rows),
+        )
+        return
+
+    # ---------- PROJECT VIEW ----------
     if data.startswith("project:"):
         pid = int(data.split(":")[1])
-        project = next(p for p in get_all_projects() if p["id"] == pid)
+        p = next(p for p in get_all_projects() if p["id"] == pid)
 
         text = (
-            f"📊 Project Info\n\n"
-            f"• Owner: @{project['owner_username']}\n"
-            f"• Network: {NETWORKS.get(project['network'])}\n"
-            f"• Contract: `{project['contract_address']}`\n"
-            f"• Group: {project.get('group_invite_link')}\n"
+            "<b>📊 Project Info</b>\n\n"
+            f"• <b>Owner:</b> @{p['owner_username']}\n"
+            f"• <b>Network:</b> {NETWORKS.get(p['network'])}\n"
+            f"• <b>Contract:</b> <code>{p['contract_address']}</code>\n"
+            f"• <b>Group:</b> {p.get('group_invite_link') or 'Not set'}\n"
+            f"• <b>Channel:</b> {p.get('channel_chat_id') or 'Not set'}\n"
         )
 
         kb = InlineKeyboardMarkup([
@@ -196,7 +213,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("⬅ Back", callback_data="admin_project")],
         ])
 
-        await q.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
+        await q.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
         return
 
     if data.startswith("delete:"):
@@ -204,20 +221,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("✅ Project deleted.", reply_markup=admin_dashboard_kb())
         return
 
-    # ---------- STATS ----------
-    if data == "admin_stats":
-        users = get_verified_users()
-        lines = []
-        for u in users:
-            uname = f"@{u['username']}" if u["username"] else "No username"
-            wallet = u["wallet_address"]
-            lines.append(f"• {uname} — `{wallet}`")
-
-        await q.edit_message_text(
-            f"👥 Verified Users ({len(users)})\n\n" + ("\n".join(lines) or "None"),
-            reply_markup=admin_dashboard_kb(),
-            parse_mode="Markdown",
-        )
+    # ---------- REPIN ----------
+    if data == "admin_repin":
+        await send_channel_pin(context)
+        await q.edit_message_text("📌 Verification post re-pinned.", reply_markup=admin_dashboard_kb())
         return
 
     # ---------- VERIFY ----------
@@ -232,15 +239,16 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===========================
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (update.message.text or "").strip()
     uid = update.effective_user.id
+    text = (update.message.text or "").strip()
     state, payload = get_state(uid)
 
     # ---------- CONFIG FLOW ----------
     if state == "CFG_OWNER":
         with db() as con, con.cursor() as cur:
             cur.execute(
-                "INSERT INTO projects (owner_username, network, contract_address) VALUES (%s,%s,%s) RETURNING id",
+                "INSERT INTO projects (owner_username, network, contract_address) "
+                "VALUES (%s,%s,%s) RETURNING id",
                 (text, "eth", "0x0"),
             )
             pid = cur.fetchone()[0]
@@ -251,11 +259,48 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state == "CFG_CONTRACT":
         pid = json.loads(payload)["project_id"]
+        meta = get_token_meta("eth", text)
+
+        if not meta:
+            await update.message.reply_text("❌ Invalid contract. Send again:")
+            return
+
+        upsert_state(
+            uid,
+            "CFG_CONTRACT_CONFIRM",
+            json.dumps({"project_id": pid, "contract": text, "meta": meta}),
+        )
+
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Confirm", callback_data="confirm_contract")],
+            [InlineKeyboardButton("❌ Re-enter", callback_data="retry_contract")],
+        ])
+
+        await update.message.reply_text(
+            f"🔎 <b>Token Found</b>\n\n"
+            f"Name: <b>{meta['name']}</b>\n"
+            f"Symbol: <b>{meta['symbol']}</b>\n\nConfirm this contract?",
+            reply_markup=kb,
+            parse_mode="HTML",
+        )
+        return
+
+    if state == "CFG_GROUP":
+        pid = json.loads(payload)["project_id"]
         with db() as con, con.cursor() as cur:
-            cur.execute("UPDATE projects SET contract_address=%s WHERE id=%s", (text, pid))
+            cur.execute("UPDATE projects SET group_invite_link=%s WHERE id=%s", (text, pid))
+
+        upsert_state(uid, "CFG_CHANNEL", json.dumps({"project_id": pid}))
+        await update.message.reply_text("Send channel chat_id or @channelusername:")
+        return
+
+    if state == "CFG_CHANNEL":
+        pid = json.loads(payload)["project_id"]
+        with db() as con, con.cursor() as cur:
+            cur.execute("UPDATE projects SET channel_chat_id=%s WHERE id=%s", (text, pid))
 
         upsert_state(uid, None, None)
-        await update.message.reply_text("🎉 Project configured!", reply_markup=admin_dashboard_kb())
+        await update.message.reply_text("🎉 Project fully configured!", reply_markup=admin_dashboard_kb())
         return
 
     # ---------- VERIFY ----------
@@ -270,7 +315,10 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state == "VERIFY_WALLET":
         project = get_latest_project()
-        if not is_token_holder(project["network"], text, project["contract_address"], DEFAULT_MIN_AMOUNT):
+
+        if not is_token_holder(
+            project["network"], text, project["contract_address"], DEFAULT_MIN_AMOUNT
+        ):
             await update.message.reply_text("❌ You do not hold the token.")
             return
 
@@ -282,12 +330,3 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=join_community_kb(project.get("group_invite_link")),
         )
         return
-
-    # FALLBACK
-    project = get_latest_project()
-    group_link = project.get("group_invite_link") if project else None
-    await update.message.reply_text(
-        "Tap ✅ Verify to start verification.",
-        reply_markup=join_community_kb(group_link),
-        parse_mode=None,
-    )
