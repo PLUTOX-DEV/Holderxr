@@ -229,14 +229,19 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state == "CFG_OWNER":
         with db() as con, con.cursor() as cur:
+            # Insert default network and contract_address to avoid later issues
             cur.execute(
-                "INSERT INTO projects (owner_username) VALUES (%s) RETURNING id",
-                (text,),
+                "INSERT INTO projects (owner_username, network, contract_address) "
+                "VALUES (%s, %s, %s) RETURNING id",
+                (text, "eth", "0x0"),
             )
             pid = cur.fetchone()[0]
+
+        # Move to network selection
         upsert_state(uid, "CFG_NETWORK", json.dumps({"project_id": pid}))
         await update.message.reply_text("Select network:", reply_markup=network_select_kb())
         return
+
 
     if state == "CFG_CONTRACT":
         data_json = json.loads(payload)
