@@ -5,6 +5,7 @@ import logging
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+from telegram.error import BadRequest
 
 from .config import ADMIN_USERNAMES, NETWORKS, DEFAULT_MIN_AMOUNT, BOT_USERNAME
 from .db import (
@@ -66,6 +67,16 @@ def network_select_kb():
         rows.append(row)
     return InlineKeyboardMarkup(rows)
 
+
+async def safe_edit(q, text, reply_markup=None, parse_mode=None):
+    """Safely edit message to avoid 'Message not modified' errors"""
+    try:
+        await q.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    except BadRequest as e:
+        if "Message is not modified" not in str(e):
+            raise
+
+
 # ===========================
 # Commands
 # ===========================
@@ -98,6 +109,7 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=admin_dashboard_kb(),
         parse_mode="HTML",
     )
+
 
 # ===========================
 # Channel Pin
@@ -132,6 +144,7 @@ async def send_channel_pin(context: ContextTypes.DEFAULT_TYPE):
         disable_notification=True,
     )
 
+
 # ===========================
 # Button Handlers
 # ===========================
@@ -145,7 +158,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ---------- ADMIN CONFIG ----------
     if data == "admin_config":
         upsert_state(uid, "CFG_OWNER", "{}")
-        await q.edit_message_text("Send <b>owner username</b> (without @):", parse_mode="HTML")
+        await safe_edit(q, "Send <b>owner username</b> (without @):", parse_mode="HTML")
         return
 
     if data.startswith("cfg_network:"):
@@ -155,8 +168,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with db() as con, con.cursor() as cur:
             cur.execute("UPDATE projects SET network=%s WHERE id=%s", (network, pid))
 
-        upsert_state(uid, "CFG_CONTRACT", json.dumps({"project_id": pid}))
-        await q.edit_message_text("Send contract address:")
+        upsert_state(uid, "CFG_CONTRACT", json.dumps({"project_id": pid, "network": network}))
+        await safe_edit(q, "Send contract address:")
         return
 
     # ---------- CONTRACT CONFIRM ----------
@@ -171,12 +184,12 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         upsert_state(uid, "CFG_GROUP", json.dumps({"project_id": p["project_id"]}))
-        await q.edit_message_text("✅ Contract saved.\nSend group invite link or NO_LINK:")
+        await safe_edit(q, "✅ Contract saved.\nSend group invite link or NO_LINK:")
         return
 
     if data == "retry_contract":
         upsert_state(uid, "CFG_CONTRACT", get_state(uid)[1])
-        await q.edit_message_text("Send contract address again:")
+        await safe_edit(q, "Send contract address again:")
         return
 
     # ---------- PROJECT LIST ----------
@@ -188,7 +201,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )]
             for p in get_all_projects()
         ]
-        await q.edit_message_text(
+        await safe_edit(
+            q,
             "Select a project:",
             reply_markup=InlineKeyboardMarkup(rows),
         )
@@ -213,26 +227,27 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("⬅ Back", callback_data="admin_project")],
         ])
 
-        await q.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+        await safe_edit(q, text, reply_markup=kb, parse_mode="HTML")
         return
 
     if data.startswith("delete:"):
         delete_project(int(data.split(":")[1]))
-        await q.edit_message_text("✅ Project deleted.", reply_markup=admin_dashboard_kb())
+        await safe_edit(q, "✅ Project deleted.", reply_markup=admin_dashboard_kb())
         return
 
     # ---------- REPIN ----------
     if data == "admin_repin":
         await send_channel_pin(context)
-        await q.edit_message_text("📌 Verification post re-pinned.", reply_markup=admin_dashboard_kb())
+        await safe_edit(q, "📌 Verification post re-pinned.", reply_markup=admin_dashboard_kb())
         return
 
     # ---------- VERIFY ----------
     if data == "user_verify":
         a, b = random.randint(2, 9), random.randint(2, 9)
         upsert_state(uid, "VERIFY_MATH", json.dumps({"answer": a + b}))
-        await q.edit_message_text(f"🧠 Human check: {a} + {b} ?")
+        await safe_edit(q, f"🧠 Human check: {a} + {b} ?")
         return
+
 
 # ===========================
 # Message Handlers
@@ -258,8 +273,10 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if state == "CFG_CONTRACT":
-        pid = json.loads(payload)["project_id"]
-        meta = get_token_meta("eth", text)
+        data_json = json.loads(payload)
+        pid = data_json["project_id"]
+        network = data_json.get("network", "eth")
+        meta = get_token_meta(network, text)
 
         if not meta:
             await update.message.reply_text("❌ Invalid contract. Send again:")
