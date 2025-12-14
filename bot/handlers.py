@@ -30,12 +30,10 @@ def is_admin(update: Update) -> bool:
     u = update.effective_user
     return bool(u and u.username and u.username in ADMIN_USERNAMES)
 
-
 def verify_kb():
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton("✅ Verify", callback_data="user_verify")]]
     )
-
 
 def admin_dashboard_kb():
     return InlineKeyboardMarkup(
@@ -47,14 +45,12 @@ def admin_dashboard_kb():
         ]
     )
 
-
 def join_community_kb(group_link: str | None):
     if not group_link or group_link.upper() == "NO_LINK":
         return verify_kb()
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton("👥 Join Community", url=group_link)]]
     )
-
 
 def network_select_kb():
     rows, row = [], []
@@ -67,7 +63,6 @@ def network_select_kb():
         rows.append(row)
     return InlineKeyboardMarkup(rows)
 
-
 async def safe_edit(q, text, reply_markup=None, parse_mode=None):
     """Safely edit message to avoid 'Message not modified' errors"""
     try:
@@ -76,14 +71,12 @@ async def safe_edit(q, text, reply_markup=None, parse_mode=None):
         if "Message is not modified" not in str(e):
             raise
 
-
 # ===========================
 # Commands
 # ===========================
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
-
     if args and args[0] == "verify":
         await update.message.reply_text(
             "🚀 <b>Token Holder Verification</b>\n\nTap below to start.",
@@ -102,14 +95,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=join_community_kb(project.get("group_invite_link") if project else None),
     )
 
-
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🧠 <b>Admin Dashboard</b>",
         reply_markup=admin_dashboard_kb(),
         parse_mode="HTML",
     )
-
 
 # ===========================
 # Channel Pin
@@ -144,7 +135,6 @@ async def send_channel_pin(context: ContextTypes.DEFAULT_TYPE):
         disable_notification=True,
     )
 
-
 # ===========================
 # Button Handlers
 # ===========================
@@ -163,11 +153,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("cfg_network:"):
         network = data.split(":")[1]
-        pid = json.loads(get_state(uid)[1])["project_id"]
+        state, payload = get_state(uid)
+        pid = json.loads(payload)["project_id"]
 
-        with db() as con, con.cursor() as cur:
-            cur.execute("UPDATE projects SET network=%s WHERE id=%s", (network, pid))
-
+        # Do not update database yet, store network in state
         upsert_state(uid, "CFG_CONTRACT", json.dumps({"project_id": pid, "network": network}))
         await safe_edit(q, "Send contract address:")
         return
@@ -179,8 +168,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         with db() as con, con.cursor() as cur:
             cur.execute(
-                "UPDATE projects SET contract_address=%s WHERE id=%s",
-                (p["contract"], p["project_id"]),
+                "UPDATE projects SET network=%s, contract_address=%s WHERE id=%s",
+                (p["network"], p["contract"], p["project_id"]),
             )
 
         upsert_state(uid, "CFG_GROUP", json.dumps({"project_id": p["project_id"]}))
@@ -201,11 +190,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )]
             for p in get_all_projects()
         ]
-        await safe_edit(
-            q,
-            "Select a project:",
-            reply_markup=InlineKeyboardMarkup(rows),
-        )
+        await safe_edit(q, "Select a project:", reply_markup=InlineKeyboardMarkup(rows))
         return
 
     # ---------- PROJECT VIEW ----------
@@ -226,7 +211,6 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🗑 Delete", callback_data=f"delete:{pid}")],
             [InlineKeyboardButton("⬅ Back", callback_data="admin_project")],
         ])
-
         await safe_edit(q, text, reply_markup=kb, parse_mode="HTML")
         return
 
@@ -248,7 +232,6 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(q, f"🧠 Human check: {a} + {b} ?")
         return
 
-
 # ===========================
 # Message Handlers
 # ===========================
@@ -262,9 +245,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state == "CFG_OWNER":
         with db() as con, con.cursor() as cur:
             cur.execute(
-                "INSERT INTO projects (owner_username, network, contract_address) "
-                "VALUES (%s,%s,%s) RETURNING id",
-                (text, "eth", "0x0"),
+                "INSERT INTO projects (owner_username) VALUES (%s) RETURNING id",
+                (text,),
             )
             pid = cur.fetchone()[0]
 
@@ -285,7 +267,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         upsert_state(
             uid,
             "CFG_CONTRACT_CONFIRM",
-            json.dumps({"project_id": pid, "contract": text, "meta": meta}),
+            json.dumps({"project_id": pid, "contract": text, "network": network, "meta": meta}),
         )
 
         kb = InlineKeyboardMarkup([
@@ -332,7 +314,6 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if state == "VERIFY_WALLET":
         project = get_latest_project()
-
         if not is_token_holder(
             project["network"], text, project["contract_address"], DEFAULT_MIN_AMOUNT
         ):
@@ -341,7 +322,6 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         save_verified_user(uid, update.effective_user.username or "", project["id"], text)
         upsert_state(uid, None, None)
-
         await update.message.reply_text(
             "🎉 Verified!",
             reply_markup=join_community_kb(project.get("group_invite_link")),
